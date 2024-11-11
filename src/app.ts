@@ -1,11 +1,12 @@
 import tgpu from "typegpu";
-import { struct, vec2f, vec4f, arrayOf } from "typegpu/data";
+import { struct, vec3f, vec4f, f32, arrayOf } from "typegpu/data";
 import { wgsl } from "./wgsl";
 
-const Vertex = struct({
-  position: vec2f,
+const Blob = struct({
+  position: vec3f,
+  radius: f32,
   color: vec4f,
-});
+}).$name("Vertex");
 
 export async function init({ container }: { container: HTMLDivElement }) {
   const root = await tgpu.init();
@@ -22,27 +23,31 @@ export async function init({ container }: { container: HTMLDivElement }) {
     format,
   });
 
-  const vertexBuffer = root.createBuffer(arrayOf(Vertex, 3), [
-    {
-      position: vec2f(0, 1),
-      color: vec4f(1, 0, 0, 1),
-    },
-    {
-      position: vec2f(1, -1),
+  const nBlobs = 10000;
+  const vertexBuffer = root
+    .createBuffer(arrayOf(Blob, nBlobs))
+    .$usage("storage");
+  const randomizeBlobs = () => {
+    const blobs = Array.from({ length: nBlobs }, () => ({
+      position: vec3f(
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1,
+      ),
+      radius: Math.random() * 0.1,
       color: vec4f(0, 1, 0, 1),
-    },
-    {
-      position: vec2f(-1, -1),
-      color: vec4f(0, 0, 1, 1),
-    },
-  ]).$usage('storage');
+    }));
+    vertexBuffer.write(blobs);
+  };
+  randomizeBlobs();
 
   const renderModule = root.device.createShaderModule({
     code: wgsl/*wgsl*/ `
       @group(0) @binding(0) var<storage, read> vertices: array<Vertex>;
 
       struct Vertex {
-        position: vec2<f32>,
+        position: vec3<f32>,
+        radius: f32,
         color: vec4<f32>,
       };
 
@@ -50,13 +55,13 @@ export async function init({ container }: { container: HTMLDivElement }) {
         @builtin(position) position: vec4<f32>,
         @location(0) color: vec4<f32>,
       };
-      
+
       @vertex fn vs(
         @builtin(vertex_index) vertexIndex : u32,
       ) -> VertexOutput {
         let vertex = vertices[vertexIndex];
         return VertexOutput(
-          vec4<f32>(vertex.position, 0.0, 1.0),
+          vec4<f32>(vertex.position, 1.0),
           vertex.color
         );
       }
@@ -88,6 +93,9 @@ export async function init({ container }: { container: HTMLDivElement }) {
       module: renderModule,
       targets: [{ format }],
     },
+    primitive: {
+      topology: "point-list",
+    },
   });
 
   const renderPassDescriptor = {
@@ -95,7 +103,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
     colorAttachments: [
       {
         view: context.getCurrentTexture().createView(),
-        clearValue: [0.3, 0.3, 0.3, 1.0],
+        clearValue: [0.0, 0.0, 0.0, 1.0],
         loadOp: "clear",
         storeOp: "store",
       },
@@ -118,9 +126,9 @@ export async function init({ container }: { container: HTMLDivElement }) {
     const renderPass = encoder.beginRenderPass(renderPassDescriptor);
     renderPass.setPipeline(renderPipeline);
     renderPass.setBindGroup(0, root.unwrap(renderBindGroup));
-    renderPass.draw(3);
+    renderPass.draw(nBlobs);
     renderPass.end();
-    
+
     root.device.queue.submit([encoder.finish()]);
 
     requestAnimationFrame(handleFrame);
