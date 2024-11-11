@@ -1,6 +1,14 @@
 import tgpu from "typegpu";
-import { struct, vec3f, vec4f, mat4x4f, f32, arrayOf } from "typegpu/data";
-import { mat4, utils } from "wgpu-matrix";
+import {
+  struct,
+  vec2f,
+  vec3f,
+  vec4f,
+  mat4x4f,
+  f32,
+  arrayOf,
+} from "typegpu/data";
+import { vec2, vec3, mat4, utils } from "wgpu-matrix";
 import { wgsl } from "./wgsl";
 
 const Blob = struct({
@@ -16,6 +24,10 @@ const Uniforms = struct({
   cameraMat: mat4x4f,
   projMat: mat4x4f,
 }).$name("Uniforms");
+
+function clamp(x: number, a: number, b: number): number {
+  return Math.max(a, Math.min(b, x));
+}
 
 export async function init({ container }: { container: HTMLDivElement }) {
   const root = await tgpu.init();
@@ -38,15 +50,23 @@ export async function init({ container }: { container: HTMLDivElement }) {
   const nBlobs = 1000000;
   const blobBuffer = root.createBuffer(arrayOf(Blob, nBlobs)).$usage("storage");
   const randomizeBlobs = () => {
-    const blobs = Array.from({ length: nBlobs }, () => ({
-      position: vec3f(
+    const blobs = Array.from({ length: nBlobs }, () => {
+      const position = vec3f(
         Math.random() * 2 - 1,
         Math.random() * 2 - 1,
         Math.random() * 2 - 1,
-      ),
-      radius: Math.random() * 0.1,
-      color: vec4f(0, 1, 0, 0.1),
-    }));
+      );
+      return {
+        position,
+        radius: 0.1,
+        color: vec4f(
+          position.x * 0.5 + 0.5,
+          position.y * 0.5 + 0.5,
+          position.z * 0.5 + 0.5,
+          0.3,
+        ),
+      };
+    });
     blobBuffer.write(blobs);
   };
   randomizeBlobs();
@@ -116,7 +136,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
           blend: {
             color: {
               srcFactor: "one",
-              dstFactor: "one-minus-src-alpha",
+              dstFactor: "one",
             },
             alpha: {
               srcFactor: "one",
@@ -152,13 +172,85 @@ export async function init({ container }: { container: HTMLDivElement }) {
   window.addEventListener("resize", handleResize);
   handleResize();
 
+  const origin = vec3f(0, 0, 0);
+  const pointer = {
+    down: false,
+    pos: vec2f(0, 0),
+    prevPos: vec2f(0, 0),
+  };
+  const orbitCam = {
+    dist: 5,
+    ax: 0,
+    az: 0,
+    vdist: 0,
+    vax: 0.05,
+    vaz: 40,
+    pos: vec3f(0, 0, 0),
+  };
+  const updatePointerAndCamera = (dt: number) => {
+    const pointerVel = vec2.mulScalar(
+      vec2.divScalar(vec2.sub(pointer.pos, pointer.prevPos), dt),
+      -50,
+    );
+    vec2.copy(pointer.pos, pointer.prevPos);
+
+    // decelerate
+    orbitCam.vax *= Math.pow(0.01, dt);
+    orbitCam.vaz *= Math.pow(0.01, dt);
+    orbitCam.vdist *= Math.pow(0.01, dt);
+
+    if (pointer.down) {
+      orbitCam.vax += pointerVel[1] * dt;
+      orbitCam.vaz += pointerVel[0] * dt;
+    }
+
+    orbitCam.ax = clamp(
+      orbitCam.ax + orbitCam.vax * dt,
+      -Math.PI / 2 + 0.0001,
+      Math.PI / 2 - 0.0001,
+    );
+    orbitCam.az += orbitCam.vaz * dt;
+    orbitCam.dist += orbitCam.vdist * dt;
+
+    vec3.set(0, -orbitCam.dist, 0, orbitCam.pos);
+    vec3.rotateX(orbitCam.pos, origin, orbitCam.ax, orbitCam.pos);
+    vec3.rotateZ(orbitCam.pos, origin, orbitCam.az, orbitCam.pos);
+  };
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerId > 1) return;
+      pointer.pos[0] = e.clientX / window.innerWidth;
+      pointer.pos[1] = e.clientY / window.innerHeight;
+      pointer.down = true;
+    },
+    false,
+  );
+  window.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.pointerId > 1) return;
+      pointer.pos[0] = e.clientX / window.innerWidth;
+      pointer.pos[1] = e.clientY / window.innerHeight;
+    },
+    false,
+  );
+  window.addEventListener(
+    "pointerup",
+    (e) => {
+      if (e.pointerId > 1) return;
+      pointer.down = false;
+    },
+    false,
+  );
+
   const makeUniforms = () => {
-    const cameraPos = vec3f(-5, 0, 3);
+    const cameraPos = orbitCam.pos;
     const lookPos = vec3f(0, 0, 0);
     const upVec = vec3f(0, 0, 1);
     const cameraMat = mat4.lookAt(cameraPos, lookPos, upVec, mat4x4f());
     const projMat = mat4.perspective(
-      utils.degToRad(100),
+      utils.degToRad(60),
       aspectRatio,
       0,
       1000,
@@ -167,7 +259,13 @@ export async function init({ container }: { container: HTMLDivElement }) {
     return { cameraPos, lookPos, upVec, cameraMat, projMat };
   };
 
+  let lastTime = performance.now();
   const handleFrame = () => {
+    const dt = (performance.now() - lastTime) / 1000;
+    lastTime = performance.now();
+
+    updatePointerAndCamera(dt);
+
     uniformsBuffer.write(makeUniforms());
 
     renderPassDescriptor.colorAttachments[0].view = context
