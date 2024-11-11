@@ -1,12 +1,21 @@
 import tgpu from "typegpu";
-import { struct, vec3f, vec4f, f32, arrayOf } from "typegpu/data";
+import { struct, vec3f, vec4f, mat4x4f, f32, arrayOf } from "typegpu/data";
+import { mat4, utils } from "wgpu-matrix";
 import { wgsl } from "./wgsl";
 
 const Blob = struct({
   position: vec3f,
   radius: f32,
   color: vec4f,
-}).$name("Vertex");
+}).$name("Blob");
+
+const Uniforms = struct({
+  cameraPos: vec3f,
+  lookPos: vec3f,
+  upVec: vec3f,
+  cameraMat: mat4x4f,
+  projMat: mat4x4f,
+}).$name("Uniforms");
 
 export async function init({ container }: { container: HTMLDivElement }) {
   const root = await tgpu.init();
@@ -21,12 +30,13 @@ export async function init({ container }: { container: HTMLDivElement }) {
   context.configure({
     device: root.device,
     format,
+    alphaMode: "premultiplied",
   });
 
-  const nBlobs = 10000;
-  const vertexBuffer = root
-    .createBuffer(arrayOf(Blob, nBlobs))
-    .$usage("storage");
+  const uniformsBuffer = root.createBuffer(Uniforms).$usage("uniform");
+
+  const nBlobs = 1000000;
+  const blobBuffer = root.createBuffer(arrayOf(Blob, nBlobs)).$usage("storage");
   const randomizeBlobs = () => {
     const blobs = Array.from({ length: nBlobs }, () => ({
       position: vec3f(
@@ -35,17 +45,26 @@ export async function init({ container }: { container: HTMLDivElement }) {
         Math.random() * 2 - 1,
       ),
       radius: Math.random() * 0.1,
-      color: vec4f(0, 1, 0, 1),
+      color: vec4f(0, 1, 0, 0.1),
     }));
-    vertexBuffer.write(blobs);
+    blobBuffer.write(blobs);
   };
   randomizeBlobs();
 
   const renderModule = root.device.createShaderModule({
-    code: wgsl/*wgsl*/ `
-      @group(0) @binding(0) var<storage, read> vertices: array<Vertex>;
+    code: wgsl`
+      @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+      @group(0) @binding(1) var<storage, read> blobs: array<Blob>;
 
-      struct Vertex {
+      struct Uniforms {
+        cameraPos: vec3<f32>,
+        lookPos: vec3<f32>,
+        upVec: vec3<f32>,
+        cameraMat: mat4x4<f32>,
+        projMat: mat4x4<f32>,
+      };
+
+      struct Blob {
         position: vec3<f32>,
         radius: f32,
         color: vec4<f32>,
@@ -59,27 +78,27 @@ export async function init({ container }: { container: HTMLDivElement }) {
       @vertex fn vs(
         @builtin(vertex_index) vertexIndex : u32,
       ) -> VertexOutput {
-        let vertex = vertices[vertexIndex];
-        return VertexOutput(
-          vec4<f32>(vertex.position, 1.0),
-          vertex.color
-        );
+        let blob = blobs[vertexIndex];
+        let pos = uniforms.projMat * uniforms.cameraMat * vec4f(blob.position, 1.0);
+        return VertexOutput(pos, blob.color);
       }
 
       @fragment fn fs(
         input: VertexOutput,
       ) -> @location(0) vec4<f32> {
-        return input.color;
+        return vec4f(input.color.rgb * input.color.a, input.color.a);
       }
     `,
   });
 
   const renderBindGroupLayout = tgpu.bindGroupLayout({
-    buffer: { storage: vertexBuffer.dataType },
+    uniforms: { uniform: uniformsBuffer.dataType },
+    blobs: { storage: blobBuffer.dataType },
   });
 
   const renderBindGroup = renderBindGroupLayout.populate({
-    buffer: vertexBuffer,
+    uniforms: uniformsBuffer,
+    blobs: blobBuffer,
   });
 
   const renderPipeline = root.device.createRenderPipeline({
@@ -91,7 +110,21 @@ export async function init({ container }: { container: HTMLDivElement }) {
     },
     fragment: {
       module: renderModule,
-      targets: [{ format }],
+      targets: [
+        {
+          format,
+          blend: {
+            color: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+            },
+            alpha: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+            },
+          },
+        },
+      ],
     },
     primitive: {
       topology: "point-list",
@@ -110,14 +143,33 @@ export async function init({ container }: { container: HTMLDivElement }) {
     ],
   } satisfies GPURenderPassDescriptor;
 
+  let aspectRatio = 1;
   const handleResize = () => {
     canvas.width = Math.ceil(window.innerWidth * window.devicePixelRatio);
     canvas.height = Math.ceil(window.innerHeight * window.devicePixelRatio);
+    aspectRatio = canvas.width / canvas.height;
   };
   window.addEventListener("resize", handleResize);
   handleResize();
 
+  const makeUniforms = () => {
+    const cameraPos = vec3f(-5, 0, 3);
+    const lookPos = vec3f(0, 0, 0);
+    const upVec = vec3f(0, 0, 1);
+    const cameraMat = mat4.lookAt(cameraPos, lookPos, upVec, mat4x4f());
+    const projMat = mat4.perspective(
+      utils.degToRad(100),
+      aspectRatio,
+      0,
+      1000,
+      mat4x4f(),
+    );
+    return { cameraPos, lookPos, upVec, cameraMat, projMat };
+  };
+
   const handleFrame = () => {
+    uniformsBuffer.write(makeUniforms());
+
     renderPassDescriptor.colorAttachments[0].view = context
       .getCurrentTexture()
       .createView();
