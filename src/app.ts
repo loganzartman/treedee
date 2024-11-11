@@ -219,7 +219,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
   window.addEventListener(
     "pointerdown",
     (e) => {
-      if (e.pointerId > 1) return;
+      e.preventDefault();
       pointer.pos[0] = e.clientX / window.innerWidth;
       pointer.pos[1] = e.clientY / window.innerHeight;
       pointer.down = true;
@@ -229,7 +229,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
   window.addEventListener(
     "pointermove",
     (e) => {
-      if (e.pointerId > 1) return;
+      e.preventDefault();
       pointer.pos[0] = e.clientX / window.innerWidth;
       pointer.pos[1] = e.clientY / window.innerHeight;
     },
@@ -238,7 +238,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
   window.addEventListener(
     "pointerup",
     (e) => {
-      if (e.pointerId > 1) return;
+      e.preventDefault();
       pointer.down = false;
     },
     false,
