@@ -1,0 +1,37 @@
+html,
+body {
+  background: black;
+}
+
+.app {
+  width: 100vw;
+  height: 100svh;
+}
+
+.app-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.app-error {
+  display: none;
+  flex-direction: column;
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgb(0, 0, 0, 0.5);
+  color: white;
+  font-size: 16pt;
+  font-family: system-ui;
+  padding: 2rem;
+}
+
+.app-error::before {
+  content: "Unhandled error:";
+  display: "block";
+  font-size: 24pt;
+  color: rgb(255, 100, 100);
+  margin-bottom: 1rem;
+}
