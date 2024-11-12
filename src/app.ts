@@ -235,7 +235,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
   );
   window.addEventListener(
     "pointerup",
-    (e) => {
+    () => {
       pointer.down = false;
     },
     false,
