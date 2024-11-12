@@ -240,6 +240,13 @@ export async function init({ container }: { container: HTMLDivElement }) {
     },
     false,
   );
+  window.addEventListener(
+    "pointercancel",
+    () => {
+      pointer.down = false;
+    },
+    false,
+  );
 
   const makeUniforms = () => {
     const cameraPos = orbitCam.pos;
