@@ -47,7 +47,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
   const uniformsBuffer = root.createBuffer(Uniforms).$usage("uniform");
 
-  const nBlobs = 1000000;
+  const nBlobs = 7;
   const blobBuffer = root.createBuffer(arrayOf(Blob, nBlobs)).$usage("storage");
   const randomizeBlobs = () => {
     const blobs = Array.from({ length: nBlobs }, () => {
@@ -59,12 +59,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
       return {
         position,
         radius: 0.1,
-        color: vec4f(
-          position.x * 0.5 + 0.5,
-          position.y * 0.5 + 0.5,
-          position.z * 0.5 + 0.5,
-          0.3,
-        ),
+        color: vec4f(1, 1, 1, 1),
       };
     });
     blobBuffer.write(blobs);
@@ -111,12 +106,75 @@ export async function init({ container }: { container: HTMLDivElement }) {
     `,
   });
 
+  const raymarchModule = root.device.createShaderModule({
+    code: wgsl`
+      @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+      struct Uniforms {
+        cameraPos: vec3<f32>,
+        lookPos: vec3<f32>,
+        upVec: vec3<f32>,
+        cameraMat: mat4x4<f32>,
+        projMat: mat4x4<f32>,
+      };
+
+      struct VertexOutput {
+        @builtin(position) position: vec4f,
+        @location(0) uv: vec2f,
+      };
+
+      @vertex fn vs(
+        @builtin(vertex_index) vertexIndex : u32,
+      ) -> VertexOutput {
+        // full-screen quad
+        let pos = array(
+          vec2f(-1, -1),
+          vec2f(1, -1),
+          vec2f(-1, 1),
+          vec2f(-1, 1),
+          vec2f(1, -1),
+          vec2f(1, 1)
+        );
+
+        let uv = array(
+          vec2f(0, 1),
+          vec2f(1, 1),
+          vec2f(0, 0),
+          vec2f(0, 0),
+          vec2f(1, 1),
+          vec2f(1, 0)
+        );
+
+        var output: VertexOutput;
+        output.position = vec4f(pos[vertexIndex], 0.0, 1.0);
+        output.uv = uv[vertexIndex];
+        return output;
+      }
+
+      @fragment fn fs(
+        input: VertexOutput,
+      ) -> @location(0) vec4f {
+        return vec4f(input.uv, 0.0, 1.0);
+      }
+    `,
+  });
+
   const renderBindGroupLayout = tgpu.bindGroupLayout({
     uniforms: { uniform: uniformsBuffer.dataType },
     blobs: { storage: blobBuffer.dataType },
   });
 
   const renderBindGroup = renderBindGroupLayout.populate({
+    uniforms: uniformsBuffer,
+    blobs: blobBuffer,
+  });
+
+  const raymarchBindGroupLayout = tgpu.bindGroupLayout({
+    uniforms: { uniform: uniformsBuffer.dataType },
+    blobs: { storage: blobBuffer.dataType },
+  });
+
+  const raymarchBindGroup = raymarchBindGroupLayout.populate({
     uniforms: uniformsBuffer,
     blobs: blobBuffer,
   });
@@ -148,6 +206,19 @@ export async function init({ container }: { container: HTMLDivElement }) {
     },
     primitive: {
       topology: "point-list",
+    },
+  });
+
+  const raymarchPipeline = root.device.createRenderPipeline({
+    layout: root.device.createPipelineLayout({
+      bindGroupLayouts: [root.unwrap(raymarchBindGroupLayout)],
+    }),
+    vertex: {
+      module: raymarchModule,
+    },
+    fragment: {
+      module: raymarchModule,
+      targets: [{ format }],
     },
   });
 
@@ -278,9 +349,17 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
     const encoder = root.device.createCommandEncoder();
     const renderPass = encoder.beginRenderPass(renderPassDescriptor);
-    renderPass.setPipeline(renderPipeline);
-    renderPass.setBindGroup(0, root.unwrap(renderBindGroup));
-    renderPass.draw(nBlobs);
+
+    // points
+    // renderPass.setPipeline(renderPipeline);
+    // renderPass.setBindGroup(0, root.unwrap(renderBindGroup));
+    // renderPass.draw(nBlobs);
+
+    // raymarched
+    renderPass.setPipeline(raymarchPipeline);
+    renderPass.setBindGroup(0, root.unwrap(raymarchBindGroup));
+    renderPass.draw(6);
+
     renderPass.end();
 
     root.device.queue.submit([encoder.finish()]);
