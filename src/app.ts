@@ -22,7 +22,9 @@ const Uniforms = struct({
   lookPos: vec3f,
   upVec: vec3f,
   cameraMat: mat4x4f,
+  invCameraMat: mat4x4f,
   projMat: mat4x4f,
+  invProjMat: mat4x4f,
 }).$name("Uniforms");
 
 function clamp(x: number, a: number, b: number): number {
@@ -76,7 +78,9 @@ export async function init({ container }: { container: HTMLDivElement }) {
         lookPos: vec3<f32>,
         upVec: vec3<f32>,
         cameraMat: mat4x4<f32>,
+        invCameraMat: mat4x4<f32>,
         projMat: mat4x4<f32>,
+        invProjMat: mat4x4<f32>,
       };
 
       struct Blob {
@@ -115,12 +119,14 @@ export async function init({ container }: { container: HTMLDivElement }) {
         lookPos: vec3<f32>,
         upVec: vec3<f32>,
         cameraMat: mat4x4<f32>,
+        invCameraMat: mat4x4<f32>,
         projMat: mat4x4<f32>,
+        invProjMat: mat4x4<f32>,
       };
 
       struct VertexOutput {
         @builtin(position) position: vec4f,
-        @location(0) uv: vec2f,
+        @location(0) clipPos: vec2f,
       };
 
       @vertex fn vs(
@@ -147,14 +153,20 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
         var output: VertexOutput;
         output.position = vec4f(pos[vertexIndex], 0.0, 1.0);
-        output.uv = uv[vertexIndex];
+        output.clipPos = pos[vertexIndex];
         return output;
       }
 
       @fragment fn fs(
         input: VertexOutput,
       ) -> @location(0) vec4f {
-        return vec4f(input.uv, 0.0, 1.0);
+        let fragClipPos = input.clipPos.xy;
+        let fragCameraPos =
+          (uniforms.invProjMat * vec4f(fragClipPos, 0.0, 1.0)).xyz;
+        let fragWorldPos =
+          (uniforms.invCameraMat * vec4f(fragCameraPos, 1.0)).xyz;
+        let rayDir = normalize(fragWorldPos - uniforms.cameraPos);
+        return vec4f(abs(rayDir.xyz), 1.0);
       }
     `,
   });
@@ -327,11 +339,21 @@ export async function init({ container }: { container: HTMLDivElement }) {
     const projMat = mat4.perspective(
       utils.degToRad(60),
       aspectRatio,
-      0,
+      0.1,
       1000,
       mat4x4f(),
     );
-    return { cameraPos, lookPos, upVec, cameraMat, projMat };
+    const invCameraMat = mat4.inverse(cameraMat, mat4x4f());
+    const invProjMat = mat4.inverse(projMat, mat4x4f());
+    return {
+      cameraPos,
+      lookPos,
+      upVec,
+      cameraMat,
+      invCameraMat,
+      projMat,
+      invProjMat,
+    };
   };
 
   let lastTime = performance.now();
@@ -341,6 +363,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
     updatePointerAndCamera(dt);
 
+    console.log(makeUniforms());
     uniformsBuffer.write(makeUniforms());
 
     renderPassDescriptor.colorAttachments[0].view = context
