@@ -49,7 +49,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
   const uniformsBuffer = root.createBuffer(Uniforms).$usage("uniform");
 
-  const nBlobs = 15;
+  const nBlobs = 11;
   const blobBuffer = root.createBuffer(arrayOf(Blob, nBlobs)).$usage("storage");
   const randomizeBlobs = () => {
     const blobs = Array.from({ length: nBlobs }, () => {
@@ -61,7 +61,10 @@ export async function init({ container }: { container: HTMLDivElement }) {
       return {
         position,
         radius: Math.random() * 0.3 + 0.1,
-        color: vec4f(1, 1, 1, 1),
+        color: vec3.normalize(
+          vec3.add(vec3.random(0.5, vec3f()), vec3f(0.5), vec3f()),
+          vec4f(0, 0, 0, 1),
+        ),
       };
     });
     blobBuffer.write(blobs);
@@ -136,6 +139,17 @@ export async function init({ container }: { container: HTMLDivElement }) {
         @location(0) clipPos: vec2f,
       };
 
+      struct SmoothMin {
+        min: f32,
+        blend: f32,
+      };
+
+      struct SDFValue {
+        dist: f32,
+        normal: vec3f,
+        color: vec4f,
+      };
+
       @vertex fn vs(
         @builtin(vertex_index) vertexIndex : u32,
       ) -> VertexOutput {
@@ -164,28 +178,37 @@ export async function init({ container }: { container: HTMLDivElement }) {
         return output;
       }
 
-      fn sdSphere(p: vec3f, s: f32) -> f32 {
-        return length(p) - s;
-      }
-
-      fn sdSphereAt(p: vec3f, center: vec3f, s: f32) -> f32 {
-        return sdSphere(p - center, s);
+      fn sdBlob(p: vec3f, blob: Blob) -> f32 {
+        return length(p - blob.position) - blob.radius;
       }
 
       // quadratic polynomial
-      fn smin(a: f32, b: f32, k_: f32) -> f32 {
-        let k = k_ * 4.0;
-        let h = max(k - abs(a - b), 0.0) / k;
-        return min(a, b) - h * h * k * (1.0 / 4.0);
+      fn smin(a: f32, b: f32, k: f32) -> SmoothMin {
+        let h = 1.0 - min(abs(a - b) / (4.0 * k), 1.0);
+        let w = h * h;
+        let m = w * 0.5;
+        let s = w * k;
+        if (a < b) {
+          return SmoothMin(a - s, m);
+        } else {
+          return SmoothMin(b - s, 1.0 - m);
+        }
       }
 
-      fn sdf(p: vec3f) -> f32 {
-        var d = 999999.0;
+      fn sdf(p: vec3f) -> SDFValue {
+        var result = SDFValue();
+        result.dist = 999999.0;
+        result.normal = vec3f();
+        result.color = blobs[0].color;
+
         for (var i = 0u; i < arrayLength(&blobs); i += 1) {
           let blob = blobs[i];
-          d = smin(d, sdSphereAt(p, blob.position, blob.radius), 0.1);
+          let m = smin(result.dist, sdBlob(p, blob), 0.2);
+          result.dist = m.min;
+          result.color = mix(result.color, blob.color, m.blend);
         }
-        return d;
+
+        return result;
       }
 
       @fragment fn fs(
@@ -200,21 +223,25 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
         let epsilon = 0.01;
         var t = 0.0;
-        var dist = 999999.0;
-        while (t < 1000.0) {
+        var result = SDFValue();
+        for (var i = 0; i < 128; i += 1) {
           let p = uniforms.cameraPos + rayDir * t;
-          dist = sdf(p);
-          if (dist < epsilon) {
+          result = sdf(p);
+          if (result.dist < epsilon) {
             break;
           }
-          t += dist;
+          t += result.dist;
+
+          if (t > 1000.0) {
+            break;
+          }
         }
 
-        if (dist < epsilon) {
-          return vec4f(1,1,1,1);
+        if (result.dist < epsilon) {
+          return result.color;
         }
 
-        return vec4f(abs(rayDir.xyz), 1.0);
+        return vec4f(normalize(abs(rayDir.xyz) * 0.25 + 0.75), 1.0);
       }
     `,
   });
@@ -314,8 +341,8 @@ export async function init({ container }: { container: HTMLDivElement }) {
     ax: 0,
     az: 0,
     vdist: 0,
-    vax: 0.05,
-    vaz: 40,
+    vax: -2,
+    vaz: 20,
     pos: vec3f(0, 0, 0),
   };
   const updatePointerAndCamera = (dt: number) => {
@@ -326,9 +353,11 @@ export async function init({ container }: { container: HTMLDivElement }) {
     vec2.copy(pointer.pos, pointer.prevPos);
 
     // decelerate
-    orbitCam.vax *= Math.pow(0.01, dt);
-    orbitCam.vaz *= Math.pow(0.01, dt);
-    orbitCam.vdist *= Math.pow(0.01, dt);
+    orbitCam.vax *= Math.pow(0.015, dt);
+    orbitCam.vaz *= Math.pow(0.015, dt);
+    orbitCam.vdist *= Math.pow(0.015, dt);
+
+    orbitCam.vaz += 2 * dt;
 
     if (pointer.down) {
       orbitCam.vax += pointerVel[1] * dt;
