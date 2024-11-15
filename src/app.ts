@@ -49,7 +49,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
   const uniformsBuffer = root.createBuffer(Uniforms).$usage("uniform");
 
-  const nBlobs = 7;
+  const nBlobs = 15;
   const blobBuffer = root.createBuffer(arrayOf(Blob, nBlobs)).$usage("storage");
   const randomizeBlobs = () => {
     const blobs = Array.from({ length: nBlobs }, () => {
@@ -60,7 +60,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
       );
       return {
         position,
-        radius: 0.1,
+        radius: Math.random() * 0.3 + 0.1,
         color: vec4f(1, 1, 1, 1),
       };
     });
@@ -113,6 +113,7 @@ export async function init({ container }: { container: HTMLDivElement }) {
   const raymarchModule = root.device.createShaderModule({
     code: wgsl`
       @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+      @group(0) @binding(1) var<storage, read> blobs: array<Blob>;
 
       struct Uniforms {
         cameraPos: vec3<f32>,
@@ -122,6 +123,12 @@ export async function init({ container }: { container: HTMLDivElement }) {
         invCameraMat: mat4x4<f32>,
         projMat: mat4x4<f32>,
         invProjMat: mat4x4<f32>,
+      };
+
+      struct Blob {
+        position: vec3<f32>,
+        radius: f32,
+        color: vec4<f32>,
       };
 
       struct VertexOutput {
@@ -157,6 +164,30 @@ export async function init({ container }: { container: HTMLDivElement }) {
         return output;
       }
 
+      fn sdSphere(p: vec3f, s: f32) -> f32 {
+        return length(p) - s;
+      }
+
+      fn sdSphereAt(p: vec3f, center: vec3f, s: f32) -> f32 {
+        return sdSphere(p - center, s);
+      }
+
+      // quadratic polynomial
+      fn smin(a: f32, b: f32, k_: f32) -> f32 {
+        let k = k_ * 4.0;
+        let h = max(k - abs(a - b), 0.0) / k;
+        return min(a, b) - h * h * k * (1.0 / 4.0);
+      }
+
+      fn sdf(p: vec3f) -> f32 {
+        var d = 999999.0;
+        for (var i = 0u; i < arrayLength(&blobs); i += 1) {
+          let blob = blobs[i];
+          d = smin(d, sdSphereAt(p, blob.position, blob.radius), 0.1);
+        }
+        return d;
+      }
+
       @fragment fn fs(
         input: VertexOutput,
       ) -> @location(0) vec4f {
@@ -166,6 +197,23 @@ export async function init({ container }: { container: HTMLDivElement }) {
         let fragWorldPos =
           (uniforms.invCameraMat * vec4f(fragCameraPos, 1.0)).xyz;
         let rayDir = normalize(fragWorldPos - uniforms.cameraPos);
+
+        let epsilon = 0.01;
+        var t = 0.0;
+        var dist = 999999.0;
+        while (t < 1000.0) {
+          let p = uniforms.cameraPos + rayDir * t;
+          dist = sdf(p);
+          if (dist < epsilon) {
+            break;
+          }
+          t += dist;
+        }
+
+        if (dist < epsilon) {
+          return vec4f(1,1,1,1);
+        }
+
         return vec4f(abs(rayDir.xyz), 1.0);
       }
     `,
@@ -363,7 +411,6 @@ export async function init({ container }: { container: HTMLDivElement }) {
 
     updatePointerAndCamera(dt);
 
-    console.log(makeUniforms());
     uniformsBuffer.write(makeUniforms());
 
     renderPassDescriptor.colorAttachments[0].view = context
